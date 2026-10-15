@@ -1,23 +1,30 @@
 <div class="aoe-easy-resolve-card">
   <header class="aer-chat-header">
     <h2>{{itemName}}</h2>
-    <div class="aer-header-sub">{{localize "AOE.Chat.SaveText" dc=saveDC type=saveType}}</div>
+    {{#if noSave}}
+      <div class="aer-header-sub">No Saving Throw</div>
+    {{else}}
+      <div class="aer-header-sub">{{localize "AOE.Chat.SaveText" dc=saveDC type=saveType}}</div>
+    {{/if}}
     
-    {{#if damageTotal}}
-      <div>
-        <span class="aer-damage-roll" data-tooltip="{{#if damageTooltip}}{{damageTooltip}}{{else}}{{damageFormula}}{{/if}}" data-tooltip-direction="UP">
+    {{#if (ne damageTotal null)}}
+      <div style="display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 5px;">
+        <span class="aer-damage-roll" style="margin-top: 0; display: inline;" data-tooltip="{{#if damageTooltip}}{{damageTooltip}}{{else}}{{damageFormula}}{{/if}}" data-tooltip-direction="UP">
           {{localize "AOE.Chat.Damage"}} {{#if damageBreakdown}}{{damageBreakdown}}{{else}}{{damageTotal}}{{/if}}
         </span>
+        <button type="button" class="edit-damage-btn aer-btn-dos" data-tooltip="Edit Damage" style="width: auto; flex: 0 0 auto; font-size: 0.85em;">
+          <i class="fas fa-pencil-alt"></i>
+        </button>
       </div>
     {{/if}}
   </header>
 
   <div class="aer-targets-section">
     {{#each targets}}
-      <div class="target-row" data-token-id="{{id}}">
+      <div class="target-row" data-token-id="{{id}}" style="{{#if hasApplied}}opacity: 0.85;{{/if}}">
         
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div style="display: flex; align-items: center; flex: 1; overflow: hidden; padding-right: 8px;">
+          <div class="aer-target-identity" style="display: flex; align-items: center; flex: 1; overflow: hidden; padding-right: 8px; cursor: pointer;" data-tooltip="Click to pan to token">
             <img class="aer-token-img" src="{{img}}" width="28" height="28" style="border: none; margin-right: 8px; border-radius: 4px;" />
             <span class="aer-target-name" title="{{name}}">{{name}}</span>
           </div>
@@ -27,6 +34,8 @@
               <span class="aer-status-heal">{{localize "AOE.Chat.Healing"}}</span>
             {{else if isImmune}}
               <span class="aer-status-immune">{{localize "AOE.Chat.Immune"}}</span>
+            {{else if ../noSave}}
+              <span style="font-weight: bold; color: var(--aer-danger); font-size: 0.9em;">Auto-Hit</span>
             {{else if hasRolled}}
               <span style="font-weight: bold; font-size: 1.1em;" data-tooltip="{{rollTooltip}}" data-tooltip-direction="UP">{{rollTotal}}</span>
               <div style="display: flex; align-items: center; gap: 4px;">
@@ -43,6 +52,18 @@
             {{else}}
               <button class="roll-save-btn" data-token-id="{{id}}" style="padding: 2px 8px; font-size: 0.9em;">
                 <i class="fas fa-dice-d20"></i> {{localize "AOE.Chat.SaveBtn"}}
+              </button>
+            {{/if}}
+
+            {{#if hasApplied}}
+              <button type="button" class="toggle-applied-btn aer-btn-dos" data-token-id="{{id}}" data-tooltip="Applied (Click to reset for re-application)" style="color: var(--aer-healing); font-size: 0.95em;">
+                <i class="fas fa-check-circle"></i>
+              </button>
+            {{/if}}
+
+            {{#if ../isGM}}
+              <button type="button" class="remove-target-btn aer-btn-dos" data-token-id="{{id}}" data-tooltip="Remove Target" style="color: var(--aer-danger); margin-left: 2px; font-size: 0.9em;">
+                <i class="fas fa-times"></i>
               </button>
             {{/if}}
           </div>
@@ -66,9 +87,12 @@
 
   <div class="aer-gm-controls" style="display: flex; flex-direction: column; gap: 5px; border-top: 1px solid var(--aer-border); padding-top: 10px;">
     <div style="display: flex; gap: 5px;">
-      <button class="roll-all-npcs-btn" style="flex: 1;"><i class="fas fa-users"></i> {{localize "AOE.Chat.RollNPCs"}}</button>
+      {{#unless noSave}}
+        <button class="roll-all-npcs-btn" style="flex: 1;"><i class="fas fa-users"></i> {{localize "AOE.Chat.RollNPCs"}}</button>
+      {{/unless}}
       <button class="roll-damage-btn" style="flex: 1;"><i class="fas fa-tint"></i> {{localize "AOE.Chat.RollDamage"}}</button>
     </div>
-    <button class="apply-damage-btn" style="width: 100%; margin-top: 5px;"><i class="fas fa-heart-broken"></i> {{localize "AOE.Chat.ApplyDamage"}}</button>
+    <button type="button" class="add-targets-btn" style="width: 100%;"><i class="fas fa-user-plus"></i> Add Selected Tokens</button>
+    <button class="apply-damage-btn" style="width: 100%; margin-top: 2px;"><i class="fas fa-heart-broken"></i> {{localize "AOE.Chat.ApplyDamage"}}</button>
   </div>
 </div>

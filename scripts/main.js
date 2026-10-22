@@ -15,6 +15,7 @@ Hooks.once("setup", () => {
 });
 
 window.aoeEasyResolveCache = null;
+window.aoeEasyResolveTemplateCandidates = [];
 window.aoeEasyResolveQueue = Promise.resolve();
 window.aoeEasyResolveDebounce = {};
 
@@ -478,6 +479,73 @@ function formatTargetsData(targetsObj) {
         }
         return displayData;
     }).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// SF2e impulses can provide area, damage, and effects only in their rendered
+// chat card. Use this only when the item has neither native nor module damage.
+function getTextDamageFallback(html, item, flags, templateTrigger = null) {
+    if (flags.useCustomDamage || (item?.system?.damage && Object.keys(item.system.damage).length > 0)) return null;
+
+    let text = html?.text?.() || html?.textContent || "";
+    let precedingText = "";
+    const trigger = templateTrigger instanceof Element ? templateTrigger : null;
+    if (trigger) {
+        const content = trigger.closest(".message-content") || trigger.parentElement;
+        const templateLinks = [...(content?.querySelectorAll(".effect-area, [data-effect-area], .inline-template") || [])];
+        const templateIndex = templateLinks.indexOf(trigger);
+        const nextTemplate = templateLinks[templateIndex + 1];
+        const previousTemplate = templateLinks[templateIndex - 1];
+        if (content && templateIndex >= 0) {
+            const followingRange = document.createRange();
+            followingRange.setStartAfter(trigger);
+            if (nextTemplate) followingRange.setEndBefore(nextTemplate);
+            else followingRange.setEnd(content, content.childNodes.length);
+            text = followingRange.toString();
+
+            const precedingRange = document.createRange();
+            if (previousTemplate) precedingRange.setStartAfter(previousTemplate);
+            else precedingRange.setStart(content, 0);
+            precedingRange.setEndBefore(trigger);
+            precedingText = precedingRange.toString();
+        }
+    }
+
+    text = text.replace(/\s+/g, " ");
+    precedingText = precedingText.replace(/\s+/g, " ");
+    const types = Object.keys(CONFIG.PF2E?.damageTypes || {}).join("|");
+    if (!types) return null;
+    const damagePattern = new RegExp(`(\\d*d\\d+(?:\\s*[+-]\\s*\\d+|\\s*[+-]\\s*\\d*d\\d+)*)\\s+(${types})\\s+damage\\b`, "gi");
+    const followingMatch = [...text.matchAll(damagePattern)][0];
+    const precedingMatch = [...precedingText.matchAll(damagePattern)].at(-1);
+    const followingDistance = followingMatch?.index ?? Infinity;
+    const precedingDistance = precedingMatch ? precedingText.length - ((precedingMatch.index || 0) + precedingMatch[0].length) : Infinity;
+    const match = precedingDistance < followingDistance ? precedingMatch : followingMatch;
+    return match ? { formula: match[1].replace(/\s+/g, " ").trim(), type: match[2].toLowerCase() } : null;
+}
+
+function getTextOutcomeEffects(item) {
+    const description = item?.system?.description?.value || "";
+    const effects = {};
+    const outcomeMap = { "critical success": "criticalSuccess", success: "success", failure: "failure", "critical failure": "criticalFailure" };
+    const sectionPattern = /<p>\s*<strong>(Critical Success|Success|Failure|Critical Failure)<\/strong>([\s\S]*?)(?=<p>\s*<strong>(?:Critical Success|Success|Failure|Critical Failure)<\/strong>|<hr\s*\/?>|$)/gi;
+    for (const match of description.matchAll(sectionPattern)) {
+        const text = match[2];
+        if (/against\s+(?:the\s+)?next|before\s+the\s+end|until\s+the\s+end/i.test(text)) continue;
+        const uuids = [...text.matchAll(/@UUID\[([^\]]+)\]/g)].map(uuidMatch => uuidMatch[1]);
+        if (uuids.length) effects[outcomeMap[match[1].toLowerCase()]] = uuids;
+    }
+    return effects;
+}
+
+async function applyTextOutcomeEffects(actor, uuids) {
+    for (const uuid of uuids || []) {
+        try {
+            const effect = await fromUuid(uuid);
+            if (effect && ["condition", "effect"].includes(effect.type)) await actor.createEmbeddedDocuments("Item", [effect.toObject()]);
+        } catch (error) {
+            console.error(`${MODULE_ID} | Failed to apply text-derived effect ${uuid}.`, error);
+        }
+    }
 }
 
 async function renderAoEChatCard(aoeData, isGM = game.user.isGM) {
@@ -1767,8 +1835,10 @@ Hooks.on("renderChatMessageHTML", (message, html, data) => {
         }
     }
 
-    const templateButtons = $html.find('[data-pf2-action="createTemplate"], .inline-template, button[data-action="spellTemplate"], button[data-action="place-template"], button:contains("burst"), button:contains("cone"), button:contains("line"), button:contains("emanation")');
-    templateButtons.on("click", (ev) => {
+    // SF2e's action and impulse cards use .effect-area links for @Template.
+    const templateSelector = '[data-pf2-action="createTemplate"], .inline-template, .effect-area, [data-effect-area], button[data-action="spellTemplate"], button[data-action="place-template"], button:contains("burst"), button:contains("cone"), button:contains("line"), button:contains("emanation")';
+    const templateButtons = $html.find(templateSelector);
+    const cacheTemplateContext = (templateTrigger = null) => {
         const aoeFlags = item?.flags[MODULE_ID] || {};
         let fallbackName = item?.name || "AoE Effects";
         if (!item && message.flavor) fallbackName = message.flavor.replace(/<[^>]*>?/gm, '').trim();
@@ -1788,15 +1858,34 @@ Hooks.on("renderChatMessageHTML", (message, html, data) => {
             else if (cardText.includes("will")) finalType = "will";
             else finalType = "reflex"; 
         }
-        window.aoeEasyResolveCache = { 
+        window.aoeEasyResolveCache = {
             item: item, 
             name: fallbackName, 
             dc: finalDC, 
             type: finalType, 
             hazardDuration: aoeFlags.hazardDuration || null, 
-            originMessageId: message.id 
+            originMessageId: message.id,
+            textDamage: getTextDamageFallback($html, item, aoeFlags, templateTrigger)
         };
-    });
+        window.aoeEasyResolveTemplateCandidates = window.aoeEasyResolveTemplateCandidates
+            .filter(candidate => Date.now() - candidate.createdAt < 30000);
+        window.aoeEasyResolveTemplateCandidates.push({
+            createdAt: Date.now(),
+            context: { ...window.aoeEasyResolveCache }
+        });
+    };
+
+    // Capture is necessary because PF2e can consume inline-template clicks before
+    // normal bubbling listeners receive them.
+    const chatElement = $html[0];
+    if (chatElement && !chatElement.dataset.aoeEasyResolveTemplateCapture) {
+        chatElement.dataset.aoeEasyResolveTemplateCapture = "true";
+        chatElement.addEventListener("click", event => {
+            const trigger = event.target instanceof Element && event.target.closest(templateSelector);
+            if (trigger) cacheTemplateContext(trigger);
+        }, { capture: true });
+    }
+    templateButtons.on("click", event => cacheTemplateContext(event.currentTarget));
 
  // --- HOVER TO HIGHLIGHT & CLICK TO PAN (Works on both AoE Cards and Receipts) ---
  $html.find('.target-row, .aer-receipt-row').each((i, el) => {
@@ -1914,7 +2003,7 @@ $html.find('[data-token-id]:not(button):not(a)').each((i, el) => {
         const useCustomDamage = aoeFlags.useCustomDamage || !!hazardDamage;
         const baseDamage = aoeFlags.baseDamage || aoeFlags.customDamage;
         const customDamageFormula = hazardDamage || compileHeightenedDamage(originItem, baseDamage, aoeFlags.scaleDamage, aoeFlags.scaleMode, aoeData.castLevel);
-        const customDamageType = aoeFlags.customDamageType;
+        const customDamageType = aoeData.customDamageType || aoeFlags.customDamageType;
 
         let dRoll = null;
         let rollFlags = null;
@@ -2983,6 +3072,7 @@ $html.find(".add-targets-btn").off("click").on("click", async (event) => {
 
                     const saveContext = aoeData.isReactive ? "reactiveSave" : "save";
                     await executeEffectRules([token], saveContext, dos, originItem, message.actor);
+                    await applyTextOutcomeEffects(token.actor, aoeData.textOutcomeEffects?.[dos]);
                     
                     processedCount++; 
                     msgUpdates[`flags.${MODULE_ID}.targets.${tokenId}.hasApplied`] = true;
@@ -3554,7 +3644,7 @@ async function generateTemplateCard(doc, cfg) {
                 }
                 
                 // 2. SERVER LATENCY FALLBACK (Rescues server-drawn Circles/Emanations)
-                if (doc.t === "circle" && doc.distance) {
+                if (["circle", "ring"].includes(doc.t) && doc.distance) {
                     const radiusPixels = (doc.distance / canvas.dimensions.distance) * gridSize;
                     
                     const tX = t.document.x;
@@ -3701,6 +3791,7 @@ async function generateTemplateCard(doc, cfg) {
         });
 
         const itemFlags = cfg.originItem?.flags?.[MODULE_ID] || {};
+        const textOutcomeEffects = getTextOutcomeEffects(cfg.originItem);
         const hasNativeSave = !!(cfg.originItem?.system?.defense?.save?.statistic);
         const noSave = !itemFlags.useOverride && !hasNativeSave;
 
@@ -3745,6 +3836,8 @@ async function generateTemplateCard(doc, cfg) {
                     isBasicSave: cfg.isBasicSave,
                     targets: payload.targets,
                     hazardDamage: cfg.hazardDamage || null,
+                    customDamageType: cfg.customDamageType || null,
+                    textOutcomeEffects,
                     isReactive: false,
                     originMessageId: cfg.originMessageId,
                     castLevel: cfg.castLevel || 1
@@ -3764,6 +3857,14 @@ const executeShapeProcessing = async (doc) => {
         try {
             let cache = window.aoeEasyResolveCache;
             window.aoeEasyResolveCache = null; 
+
+            if (!cache) {
+                const candidates = (window.aoeEasyResolveTemplateCandidates || [])
+                    .filter(candidate => Date.now() - candidate.createdAt < 30000);
+                const candidate = candidates.pop();
+                window.aoeEasyResolveTemplateCandidates = candidates;
+                if (candidate) cache = candidate.context;
+            }
 
             if (!cache && doc.flags?.pf2e?.origin?.uuid) {
                 const originItem = await fromUuid(doc.flags.pf2e.origin.uuid);
@@ -3832,7 +3933,8 @@ const executeShapeProcessing = async (doc) => {
                 saveDC: saveDC, 
                 isBasicSave: isBasicSave, 
                 originItem: originItem, 
-                hazardDamage: cache.hazardDamage || null,
+                hazardDamage: cache.hazardDamage || cache.textDamage?.formula || null,
+                customDamageType: cache.textDamage?.type || null,
                 hazardDuration: cache.hazardDuration || null,
                 originMessageId: cache.originMessageId,
                 castLevel: cache.castLevel || 1

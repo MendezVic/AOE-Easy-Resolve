@@ -1,0 +1,75 @@
+name: Build and release module
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Read module version
+        id: module
+        shell: bash
+        run: |
+          version="$(node -p 'require("./module.json").version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure this version has not already been released
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.module.outputs.version }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "A release for module version $VERSION already exists. Bump module.json before pushing to main."
+            exit 1
+          fi
+
+      - name: Assemble release archive
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.module.outputs.version }}
+        run: |
+          mkdir release
+          cp -R lang scripts styles templates release/
+          cp module.json release/
+          node --input-type=module <<'EOF'
+          import { readFile, writeFile } from "node:fs/promises";
+
+          const manifestPath = "release/module.json";
+          const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+          const repository = process.env.REPOSITORY;
+          const version = process.env.VERSION;
+          const baseUrl = `https://github.com/${repository}`;
+
+          Object.assign(manifest, {
+            url: baseUrl,
+            manifest: `https://raw.githubusercontent.com/${repository}/main/module.json`,
+            download: `${baseUrl}/releases/download/${version}/module.zip`,
+          });
+
+          await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+          EOF
+          (
+            cd release
+            zip -r ../module.zip lang scripts styles templates module.json
+          )
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.module.outputs.version }}
+        run: gh release create "$VERSION" module.zip release/module.json --title "$VERSION" --generate-notes

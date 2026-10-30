@@ -2,9 +2,13 @@
   "id": "aoe-easy-resolve",
   "title": "AoE Easy Resolve",
   "description": "Automates targeted saving throws and damage application from measured templates for PF2e and SF2e.",
-  "version": "v6.1",
+  "version": "v6.1.1",
   "socket": true,
-  "author": "Sean Wright",
+  "authors": [
+    {
+      "name": "Sean Wright"
+    }
+  ],
   "compatibility": {
     "minimum": "14",
     "verified": "14",
@@ -44,11 +48,7 @@
       }
     ]
   },
-  "templates": [
-    "modules/aoe-easy-resolve/templates/chat-card.hbs",
-    "modules/aoe-easy-resolve/templates/item-config.hbs"
-  ],
   "manifest": "https://raw.githubusercontent.com/MendezVic/AOE-Easy-Resolve/main/module.json",
-  "download": "https://github.com/MendezVic/AOE-Easy-Resolve/releases/download/v6.1/module.zip",
+  "download": "https://github.com/MendezVic/AOE-Easy-Resolve/releases/download/v6.1.1/module.zip",
   "flags": {}
 }
